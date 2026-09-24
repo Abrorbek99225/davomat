@@ -35,8 +35,8 @@ PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL", os.getenv("PUBLIC_URL", ""))
 # ===== MINI APP =====
 # HTTPS manzil (cloudflared/ngrok yoki server domeni)
 WEBAPP_URL = "https://SIZNING-HTTPS-MANZIL"
-PORT = 8080
-RUN_WEB = False   # True = lokal kompyuter, False = PythonAnywhere
+PORT = int(os.getenv("PORT", 8080))
+RUN_WEB = True    # Web-server har doim ishlaydi (Render webhook + Mini App)
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 INDEX_HTML = """<!DOCTYPE html>
