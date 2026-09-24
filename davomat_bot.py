@@ -433,18 +433,17 @@ KIRISH_KB = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="🔑 Kirish")]], resize_keyboard=True)
 
 # ====== MINI APP WEB SERVER (faqat lokal rejimda) ======
-app = web.Application()
-
-# ===== XATO TUZATISH YORDAMCHISI: xatolikni javobda ko'rsatadi =====
+# ===== XATO TUZATISH YORDAMCHISI (ro'yxatdan o'tgan) =====
 import traceback
-@web.middleware
 async def error_middleware(request, handler):
     try:
         return await handler(request)
     except Exception:
         tb = traceback.format_exc()
         logging.error(f"API XATO: {tb}")
-        return web.json_response({"xato": tb[-800:]}, status=500) if HAS_WEB else None
+        return web.json_response({"xato": tb[-800:]}, status=500)
+
+app = web.Application(middlewares=[error_middleware])
 
 async def index(request):
     path = os.path.join(BASE, "index.html")
@@ -453,8 +452,8 @@ async def index(request):
     return web.Response(text=INDEX_HTML, content_type="text/html")
 
 async def api_me(request):
-    try: tid = int(request.query.get("id", 0))
-    except Exception: tid = 0
+  try:
+    tid = int(request.query.get("id", 0) or 0)
     u = db.execute("SELECT name,phone,group_id FROM users WHERE tg_id=?", (tid,)).fetchone()
     if not u: return web.json_response({"error": "not found"}, status=404)
     name, phone, gid = u
@@ -478,15 +477,16 @@ async def api_me(request):
     return web.json_response({"name": name, "phone": phone, "group": gname,
         "spec": "Kursant", "keldi": keldi, "nb": nb, "jami": jami,
         "pct": pct, "lessons": lessons})
+  except Exception:
+    import traceback as _tb
+    return web.json_response({"xato": _tb.format_exc()[-800:]}, status=500)
 
 if HAS_WEB:
     app.router.add_get("/", index)
 
 async def api_location(request):
-    try:
-        lat = float(request.query.get("lat", 0)); lon = float(request.query.get("lon", 0))
-    except Exception:
-        return web.json_response({"error": "bad coords"}, status=400)
+  try:
+    lat = float(request.query.get("lat", 0)); lon = float(request.query.get("lon", 0))
     inside = None; res = []
     for bid, name, blat, blon, rad in db.execute(
             "SELECT id,name,lat,lon,radius_m FROM buildings").fetchall():
@@ -495,6 +495,9 @@ async def api_location(request):
         if d <= rad and inside is None:
             inside = name
     return web.json_response({"inside": inside, "buildings": res})
+  except Exception:
+    import traceback as _tb
+    return web.json_response({"xato": _tb.format_exc()[-800:]}, status=500)
 
 async def api_scan(request):
     import json as _json
