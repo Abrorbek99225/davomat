@@ -396,7 +396,18 @@ KIRISH_KB = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="🔑 Kirish")]], resize_keyboard=True)
 
 # ====== MINI APP WEB SERVER (faqat lokal rejimda) ======
-app = web.Application() if HAS_WEB else None
+app = web.Application()
+
+# ===== XATO TUZATISH YORDAMCHISI: xatolikni javobda ko'rsatadi =====
+import traceback
+@web.middleware
+async def error_middleware(request, handler):
+    try:
+        return await handler(request)
+    except Exception:
+        tb = traceback.format_exc()
+        logging.error(f"API XATO: {tb}")
+        return web.json_response({"xato": tb[-800:]}, status=500) if HAS_WEB else None
 
 async def index(request):
     path = os.path.join(BASE, "index.html")
