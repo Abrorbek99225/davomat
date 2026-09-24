@@ -479,7 +479,7 @@ async def api_me(request):
         "pct": pct, "lessons": lessons})
   except Exception:
     import traceback as _tb
-    return web.json_response({"xato": _tb.format_exc()[-800:]}, status=500)
+    return web.json_response({"XATO": _tb.format_exc()[-800:]}, status=200)
 
 if HAS_WEB:
     app.router.add_get("/", index)
@@ -497,7 +497,7 @@ async def api_location(request):
     return web.json_response({"inside": inside, "buildings": res})
   except Exception:
     import traceback as _tb
-    return web.json_response({"xato": _tb.format_exc()[-800:]}, status=500)
+    return web.json_response({"XATO": _tb.format_exc()[-800:]}, status=200)
 
 async def api_scan(request):
     import json as _json
@@ -541,9 +541,43 @@ async def api_scan(request):
     return web.json_response({"ok": True,
         "msg": f"{word} qayd etildi! \u2705 {les[3]} ({les[1]}-para), vaqt: {now.strftime('%H:%M')}"})
 
+async def api_debug(request):
+    steps = {"version": "diag-2"}
+    for tbl in ["users","groups_","students","attendance","buildings","checkins","lessons"]:
+        try:
+            steps[tbl] = db.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+        except Exception as e:
+            steps[tbl + "_XATO"] = str(e)
+    try:
+        u = db.execute("SELECT name,phone,group_id FROM users WHERE tg_id=7079998283").fetchone()
+        steps["admin_bor"] = bool(u)
+        if u: steps["admin_gid"] = u[2]
+    except Exception as e:
+        steps["admin_XATO"] = str(e)
+    return web.json_response(steps)
+
+app.router.add_get("/api/debug", api_debug)
 app.router.add_post("/api/scan", api_scan)
 app.router.add_get("/api/location", api_location)
 app.router.add_get("/api/me", api_me)
+
+async def api_debug(request):
+    steps = {"version": "diag-1"}
+    for tbl in ["users", "groups_", "students", "attendance",
+                "buildings", "checkins", "lessons"]:
+        try:
+            steps[tbl] = db.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+        except Exception as e:
+            steps[tbl + "_XATO"] = str(e)
+    try:
+        u = db.execute("SELECT name,phone,group_id FROM users WHERE tg_id=7079998283").fetchone()
+        steps["admin_bor"] = bool(u)
+        if u: steps["admin_gid"] = u[2]
+    except Exception as e:
+        steps["admin_XATO"] = str(e)
+    return web.json_response(steps)
+
+app.router.add_get("/api/debug", api_debug)
 
 WEEKDAYS = ["Du", "Se", "Cho", "Pa", "Ju", "Sha", "Ya"]
 
