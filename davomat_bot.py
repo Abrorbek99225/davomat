@@ -302,6 +302,7 @@ function checkLocation() {
       const r = await fetch(API + '/api/location?id=' + USER.id +
         '&lat=' + p.coords.latitude + '&lon=' + p.coords.longitude);
       const d = await r.json();
+      INSIDE_NAME = d.inside;
       if (d.inside) {
         locOk('\u2705 ' + d.inside + ' ichidasiz');
       } else {
@@ -327,27 +328,45 @@ function locErr(txt) {
 }
 checkLocation();
 
-/* ---- Kirish / Chiqish: avval lokatsiya, keyin QR (tez orada) ---- */
-document.getElementById('btn-in').onclick = () => {
-  if (!MY_POS) { tg.showAlert('\u26a0\ufe0f Lokatsiya aniqlanmagan. Iltimos, kuting yoki sahifani yangilang.'); return; }
-  checkInGuard('in');
-};
-document.getElementById('btn-out').onclick = () => {
-  if (!MY_POS) { tg.showAlert('\u26a0\ufe0f Lokatsiya aniqlanmagan.'); return; }
-  checkInGuard('out');
-};
-async function checkInGuard(mode) {
+/* ---- Kirish / Chiqish: lokatsiya + QR skaner ---- */
+let INSIDE_NAME = null;
+document.getElementById('btn-in').onclick = () => startScan('in');
+document.getElementById('btn-out').onclick = () => startScan('out');
+
+async function startScan(mode) {
+  if (!USER) { tg.showAlert('Telegram ichida oching'); return; }
+  if (!MY_POS) { tg.showAlert('\u26a0\ufe0f Lokatsiya aniqlanmagan. Sahifani yangilang.'); return; }
+  // 1) lokatsiya tekshiruvi
   try {
     const r = await fetch(API + '/api/location?id=' + USER.id +
       '&lat=' + MY_POS.latitude + '&lon=' + MY_POS.longitude);
     const d = await r.json();
+    INSIDE_NAME = d.inside;
     if (!d.inside) {
-      tg.showAlert('\u274c Siz hech bir bino ichida emassiz!\nDavomat olish uchun markaz binosiga keling.');
+      tg.showAlert('\u274c Siz hech bir bino ichida emassiz!\nDavomat uchun markazga keling.');
       return;
     }
-    if (mode === 'in') tg.showConfirm('\u2705 Joylashuv tasdiqlandi: ' + d.inside + '\nEndi QR kod skanerlanadi (keyingi qadamda).');
-    else tg.showConfirm('\u2705 ' + d.inside + ' ichidasiz. Chiqish qayd etiladi (keyingi qadamda).');
-  } catch(e) { tg.showAlert('Server bilan aloqa yo\'q'); }
+  } catch(e) { tg.showAlert('Server bilan aloqa yo\'q'); return; }
+  // 2) QR skaner ochish
+  const word = mode === 'in' ? 'KIRISH' : 'CHIQISH';
+  tg.showScanQrPopup({text: word + ' uchun QR kodni skanerlang'}, async (qr) => {
+    tg.closeScanQrPopup();
+    tg.MainButton.show();
+    tg.MainButton.setText('\u23f3 Tekshirilmoqda...');
+    try {
+      const r = await fetch(API + '/api/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: USER.id, qr: qr, mode: mode,
+                              lat: MY_POS.latitude, lon: MY_POS.longitude})
+      });
+      const d = await r.json();
+      tg.MainButton.hide();
+      if (d.ok) { tg.showAlert('\u2705 ' + d.msg); checkLocation(); }
+      else { tg.showAlert('\u274c ' + (d.error || 'Xato')); }
+    } catch(e) { tg.MainButton.hide(); tg.showAlert('Server bilan aloqa yo\'q'); }
+    return true;
+  });
 }
 </script>
 </body>
@@ -377,6 +396,11 @@ db.execute("""CREATE TABLE IF NOT EXISTS attendance(
 db.execute("""CREATE TABLE IF NOT EXISTS buildings(
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
     lat REAL, lon REAL, radius_m INTEGER)""")
+db.execute("""CREATE TABLE IF NOT EXISTS checkins(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER, lesson_id INTEGER, action TEXT,
+    cdate TEXT, ctime TEXT,
+    UNIQUE(user_id, lesson_id, action, cdate))""")
 db.execute("""CREATE TABLE IF NOT EXISTS lessons(
     id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER,
     para_num INTEGER, fan TEXT, oqituvchi TEXT, xona TEXT, bino TEXT,
@@ -388,6 +412,9 @@ class TakeDate(StatesGroup):    group_id = State(); date = State()
 class PercentSt(StatesGroup):   group_id = State(); month = State()
 class AssignT(StatesGroup):     teacher = State(); group = State()
 class AssignU(StatesGroup):     user = State(); group = State()
+class MakeQR(StatesGroup):
+    group = State(); lesson = State()
+
 class AddBuilding(StatesGroup):
     name = State(); lat = State(); lon = State(); radius = State()
 
@@ -469,10 +496,51 @@ async def api_location(request):
             inside = name
     return web.json_response({"inside": inside, "buildings": res})
 
-if HAS_WEB:
-    app.router.add_get("/api/location", api_location)
-    app.router.add_get("/api/me", api_me)
+async def api_scan(request):
+    import json as _json
+    try:
+        data = await request.json()
+        tid = int(data.get("id", 0)); qr = str(data.get("qr", ""))
+        mode = str(data.get("mode", "in"))
+        lat = float(data.get("lat", 0)); lon = float(data.get("lon", 0))
+    except Exception:
+        return web.json_response({"error": "So'rov noto'g'ri"}, status=400)
+    u = db.execute("SELECT group_id FROM users WHERE tg_id=?", (tid,)).fetchone()
+    if not u: return web.json_response({"error": "Avval ro'yxatdan o'ting!"}, status=403)
+    try:
+        q = _json.loads(qr)
+        lid = int(q["l"]); qdate = str(q["d"])
+    except Exception:
+        return web.json_response({"error": "QR kod noto'g'ri! Ruxsat etilgan QR emas."}, status=400)
+    les = db.execute("SELECT group_id,para_num,bino,fan,start_time FROM lessons WHERE id=?", (lid,)).fetchone()
+    if not les: return web.json_response({"error": "Dars topilmadi"}, status=404)
+    if u[0] != les[0]:
+        return web.json_response({"error": "Bu QR sizning guruhingizga tegishli emas!"}, status=403)
+    today = datetime.date.today().isoformat()
+    if qdate != today:
+        return web.json_response({"error": f"QR boshqa kunga tegishli ({qdate}). Bugun: {today}"}, status=403)
+    b = db.execute("SELECT lat,lon,radius_m FROM buildings WHERE name=?", (les[2],)).fetchone()
+    if b:
+        dist = haversine_m(lat, lon, b[0], b[1])
+        if dist > b[2]:
+            return web.json_response(
+                {"error": f"Siz {les[2]} ichida emassiz! ({round(dist)} m uzoqda)"}, status=403)
+    dup = db.execute("SELECT 1 FROM checkins WHERE user_id=? AND lesson_id=? AND action=? AND cdate=?",
+                     (tid, lid, mode, today)).fetchone()
+    if dup:
+        word = "kirish" if mode == "in" else "chiqish"
+        return web.json_response({"error": f"{word.capitalize()} allaqachon qayd etilgan!"}, status=409)
+    now = datetime.datetime.now()
+    db.execute("INSERT INTO checkins(user_id,lesson_id,action,cdate,ctime) VALUES(?,?,?,?,?)",
+               (tid, lid, mode, today, now.strftime("%H:%M")))
+    db.commit()
+    word = "Kirish" if mode == "in" else "Chiqish"
+    return web.json_response({"ok": True,
+        "msg": f"{word} qayd etildi! \u2705 {les[3]} ({les[1]}-para), vaqt: {now.strftime('%H:%M')}"})
 
+app.router.add_post("/api/scan", api_scan)
+app.router.add_get("/api/location", api_location)
+app.router.add_get("/api/me", api_me)
 
 WEEKDAYS = ["Du", "Se", "Cho", "Pa", "Ju", "Sha", "Ya"]
 
@@ -533,7 +601,8 @@ async def menu(answer, role, text="🏫 **DAVOMAT BOTI**\n"):
                     ("🔐 O'qituvchini biriktirish", "assign"),
                     ("👥 Foydalanuvchini biriktirish", "assign_u"),
                     ("📚 Dars qo'shish", "add_lesson"),
-                    ("📍 Bino qo'shish", "add_building")]
+                    ("📍 Bino qo'shish", "add_building"),
+                    ("🔳 QR yaratish", "make_qr")]
     await answer(text, reply_markup=kb(buttons, 2), parse_mode="Markdown")
 
 @dp.message(Command("menu"))
@@ -542,13 +611,6 @@ async def back(m: Message):
         await m.answer(greeting(m.from_user.first_name), reply_markup=CONTACT_KB()); return
     await menu(m.answer, role_of(m.from_user.id))
 
-@dp.message()
-async def not_registered(m: Message):
-    if not db.execute("SELECT 1 FROM users WHERE tg_id=?", (m.from_user.id,)).fetchone():
-        await m.answer(f"{m.from_user.first_name}, siz hali ro'yxatdan o'tmagansiz.\n"
-                       f"Quyidagi tugmani bosib ro'yxatdan o'ting:", reply_markup=CONTACT_KB())
-    else:
-        await menu(m.answer, role_of(m.from_user.id))
 
 # ================= guruh / o'quvchi =================
 @dp.callback_query(F.data == "add_group")
@@ -677,6 +739,43 @@ def haversine_m(lat1, lon1, lat2, lon2):
     dp = math.radians(lat2 - lat1); dl = math.radians(lon2 - lon1)
     a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2 * R * math.asin(math.sqrt(a))
+
+# ================= QR yaratish (admin) =================
+@dp.callback_query(F.data == "make_qr")
+async def make_qr(c: CallbackQuery, state: FSMContext):
+    rows = db.execute("SELECT id,name FROM groups_").fetchall()
+    if not rows: return await c.message.answer("Avval guruh qo'shing!")
+    await state.set_state(MakeQR.group)
+    await c.message.answer("Qaysi guruh uchun QR?", reply_markup=kb([(n, f"qg_{i}") for i, n in rows]))
+
+@dp.callback_query(MakeQR.group, F.data.startswith("qg_"))
+async def make_qr2(c: CallbackQuery, state: FSMContext):
+    gid = int(c.data.split("_")[1]); await state.update_data(group=gid)
+    wd = datetime.datetime.now().weekday()
+    rows = db.execute("""SELECT id,para_num,fan,start_time FROM lessons
+                         WHERE group_id=? AND weekday=? ORDER BY start_time""", (gid, wd)).fetchall()
+    if not rows: return await c.message.answer("Bugun bu guruhda dars yo'q!")
+    await state.set_state(MakeQR.lesson)
+    await c.message.answer("Qaysi para uchun?",
+        reply_markup=kb([(f"{p}-para {f} ({t})", f"ql_{i}") for i, p, f, t in rows]))
+
+@dp.callback_query(MakeQR.lesson, F.data.startswith("ql_"))
+async def make_qr3(c: CallbackQuery, state: FSMContext):
+    lid = int(c.data.split("_")[1]); d = await state.get_data(); await state.clear()
+    lesson = db.execute("SELECT group_id,para_num FROM lessons WHERE id=?", (lid,)).fetchone()
+    today = datetime.date.today().isoformat()
+    import json as _json
+    qr_text = _json.dumps({"l": lid, "g": lesson[0], "p": lesson[1], "d": today})
+    import qrcode, io
+    img = qrcode.make(qr_text)
+    buf = io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+    from aiogram.types import BufferedInputFile
+    await c.message.answer_photo(
+        BufferedInputFile(buf.read(), filename="qr.png"),
+        caption=f"🔳 {lesson[1]}-para QR kodi\n"
+                f"📅 Sana: {today}\n\n"
+                f"Bu QR ni xonaga osib qo'ying. Kursantlar «Kirish»/«Chiqish» da skanerlaydi.")
+    await menu(c.message.answer, role_of(c.from_user.id))
 
 # ================= dars jadvali =================
 @dp.callback_query(F.data == "add_lesson")
@@ -934,6 +1033,14 @@ async def main():
             await dp.start_polling(bot)
     else:
         await dp.start_polling(bot)
+
+@dp.message()
+async def not_registered(m: Message):
+    if not db.execute("SELECT 1 FROM users WHERE tg_id=?", (m.from_user.id,)).fetchone():
+        await m.answer(f"{m.from_user.first_name}, siz hali ro'yxatdan o'tmagansiz.\n"
+                       f"Quyidagi tugmani bosib ro'yxatdan o'ting:", reply_markup=CONTACT_KB())
+    else:
+        await menu(m.answer, role_of(m.from_user.id))
 
 if __name__ == "__main__":
     asyncio.run(main())
