@@ -561,24 +561,6 @@ app.router.add_post("/api/scan", api_scan)
 app.router.add_get("/api/location", api_location)
 app.router.add_get("/api/me", api_me)
 
-async def api_debug(request):
-    steps = {"version": "diag-1"}
-    for tbl in ["users", "groups_", "students", "attendance",
-                "buildings", "checkins", "lessons"]:
-        try:
-            steps[tbl] = db.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
-        except Exception as e:
-            steps[tbl + "_XATO"] = str(e)
-    try:
-        u = db.execute("SELECT name,phone,group_id FROM users WHERE tg_id=7079998283").fetchone()
-        steps["admin_bor"] = bool(u)
-        if u: steps["admin_gid"] = u[2]
-    except Exception as e:
-        steps["admin_XATO"] = str(e)
-    return web.json_response(steps)
-
-app.router.add_get("/api/debug", api_debug)
-
 WEEKDAYS = ["Du", "Se", "Cho", "Pa", "Ju", "Sha", "Ya"]
 
 def role_of(tg_id):
