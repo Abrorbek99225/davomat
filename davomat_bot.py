@@ -232,6 +232,16 @@ async function loadMe() {
   try {
     const r = await fetch(API + '/api/me?id=' + USER.id);
     const d = await r.json();
+    if (d.error) {
+      document.getElementById('pname').textContent = '⚠️ Ro\'yxatdan o\'tmagansiz';
+      document.getElementById('psub').textContent = '';
+      document.getElementById('lessons').innerHTML =
+        '<div style="text-align:center;padding:30px 16px;color:#9a9aa0;font-size:15px;line-height:1.7">' +
+        'Botga qayting va<br><b style="color:#3a86ff">«Ro\'yxatdan o\'ting»</b> tugmasini bosing,' +
+        '<br>keyin «Kirish» ni qayta oching</div>';
+      document.getElementById('pct').textContent = '—';
+      return;
+    }
     document.getElementById('pname').textContent = d.name;
     document.getElementById('psub').textContent = (d.spec || '') + (d.group ? ' · ' + d.group : '');
     document.getElementById('pct').textContent = d.pct + '%';
