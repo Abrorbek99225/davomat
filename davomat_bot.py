@@ -26,8 +26,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from openpyxl import Workbook
 
-TOKEN = os.getenv("7079998283", "8076284480:AAEJMGjTl61M43F0jI-Gb-goO1e0wVfWutc")
-ADMIN_ID = int(os.getenv("7079998283", "0"))
+TOKEN = os.getenv("TOKEN", "")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # Render avtomatik beradi; mahalliy sinov uchun PUBLIC_URL="https://..." yozing
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL", os.getenv("PUBLIC_URL", ""))
