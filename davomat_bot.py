@@ -26,7 +26,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from openpyxl import Workbook
 
-TOKEN = os.getenv("TOKEN", "")
+TOKEN = os.getenv("TOKEN", "BU_YERGA_BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # Render avtomatik beradi; mahalliy sinov uchun PUBLIC_URL="https://..." yozing
@@ -137,7 +137,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="loc">
     <div class="dot"></div>
-    <div class="loc-txt"><div class="loc-err">Lokatsiya tekshirilmoqda...</div><div class="loc-sub" id="locsub"></div></div>
+    <div class="loc-txt"><div class="loc-err">\u23f3 Lokatsiya aniqlanmoqda...</div><div class="loc-sub" id="locsub"></div></div>
   </div>
 
   <div class="stats">
@@ -279,26 +279,66 @@ async function loadMe() {
 }
 loadMe();
 
-/* ---- location ---- */
-if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(p => {
-    document.querySelector('.loc-err').textContent = '📍 Joylashuv olindi';
-    document.querySelector('.loc-err').style.color = '#2ecc71';
-    document.getElementById('locsub').textContent =
-      p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) +
-      ' · ±' + Math.round(p.coords.accuracy) + 'm';
-  }, () => {
-    document.querySelector('.loc-err').textContent = '⚠️ Lokatsiya ruxsat berilmadi';
-  }, { enableHighAccuracy:true, timeout:10000 });
+/* ---- location: server bilan tekshirish ---- */
+let MY_POS = null;
+function fmtDist(m) { return m >= 1000 ? (m/1000).toFixed(1) + ' km' : m + ' m'; }
+function checkLocation() {
+  if (!navigator.geolocation) { locErr('Brauzer lokatsiyani qo\'llamaydi'); return; }
+  locWait();
+  navigator.geolocation.getCurrentPosition(async p => {
+    MY_POS = p.coords;
+    if (!USER) { locErr('Telegram foydalanuvchisi topilmadi'); return; }
+    try {
+      const r = await fetch(API + '/api/location?id=' + USER.id +
+        '&lat=' + p.coords.latitude + '&lon=' + p.coords.longitude);
+      const d = await r.json();
+      if (d.inside) {
+        locOk('\u2705 ' + d.inside + ' ichidasiz');
+      } else {
+        locErr('\u2744 Hech bir bino ichida emassiz');
+      }
+      document.getElementById('locsub').textContent =
+        d.buildings.map(b => b.name + ': ' + fmtDist(b.dist)).join(' · ');
+    } catch(e) { locErr('Server bilan aloqa yo\'q'); }
+  }, () => locErr('\u26a0\ufe0f Lokatsiya ruxsat berilmadi. Sozlamalardan yoqing!'),
+     { enableHighAccuracy:true, timeout:15000, maximumAge:30000 });
 }
+function locWait() {
+  const el = document.querySelector('.loc-err');
+  el.textContent = '\u23f3 Lokatsiya aniqlanmoqda...'; el.style.color = '#9a9aa0';
+}
+function locOk(txt) {
+  const el = document.querySelector('.loc-err');
+  el.textContent = txt; el.style.color = '#2ecc71';
+}
+function locErr(txt) {
+  const el = document.querySelector('.loc-err');
+  el.textContent = txt; el.style.color = '#ff6b6b';
+}
+checkLocation();
 
-/* ---- Kirish / Chiqish (2-bosqich: QR skaner) ---- */
+/* ---- Kirish / Chiqish: avval lokatsiya, keyin QR (tez orada) ---- */
 document.getElementById('btn-in').onclick = () => {
-  tg.showAlert('📷 2-bosqichda: QR kod skanerlanib, darsga kirish qayd etiladi');
+  if (!MY_POS) { tg.showAlert('\u26a0\ufe0f Lokatsiya aniqlanmagan. Iltimos, kuting yoki sahifani yangilang.'); return; }
+  checkInGuard('in');
 };
 document.getElementById('btn-out').onclick = () => {
-  tg.showAlert('↩️ 2-bosqichda: QR skanerlab chiqish qayd etiladi');
+  if (!MY_POS) { tg.showAlert('\u26a0\ufe0f Lokatsiya aniqlanmagan.'); return; }
+  checkInGuard('out');
 };
+async function checkInGuard(mode) {
+  try {
+    const r = await fetch(API + '/api/location?id=' + USER.id +
+      '&lat=' + MY_POS.latitude + '&lon=' + MY_POS.longitude);
+    const d = await r.json();
+    if (!d.inside) {
+      tg.showAlert('\u274c Siz hech bir bino ichida emassiz!\nDavomat olish uchun markaz binosiga keling.');
+      return;
+    }
+    if (mode === 'in') tg.showConfirm('\u2705 Joylashuv tasdiqlandi: ' + d.inside + '\nEndi QR kod skanerlanadi (keyingi qadamda).');
+    else tg.showConfirm('\u2705 ' + d.inside + ' ichidasiz. Chiqish qayd etiladi (keyingi qadamda).');
+  } catch(e) { tg.showAlert('Server bilan aloqa yo\'q'); }
+}
 </script>
 </body>
 </html>"""
@@ -324,6 +364,9 @@ db.execute("""CREATE TABLE IF NOT EXISTS attendance(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id INTEGER, date TEXT, status TEXT,
     UNIQUE(student_id, date))""")
+db.execute("""CREATE TABLE IF NOT EXISTS buildings(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
+    lat REAL, lon REAL, radius_m INTEGER)""")
 db.execute("""CREATE TABLE IF NOT EXISTS lessons(
     id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER,
     para_num INTEGER, fan TEXT, oqituvchi TEXT, xona TEXT, bino TEXT,
@@ -335,6 +378,9 @@ class TakeDate(StatesGroup):    group_id = State(); date = State()
 class PercentSt(StatesGroup):   group_id = State(); month = State()
 class AssignT(StatesGroup):     teacher = State(); group = State()
 class AssignU(StatesGroup):     user = State(); group = State()
+class AddBuilding(StatesGroup):
+    name = State(); lat = State(); lon = State(); radius = State()
+
 class AddLesson(StatesGroup):
     group = State(); para = State(); fan = State(); oqituvchi = State()
     xona = State(); bino = State(); weekday = State(); time = State()
@@ -387,7 +433,25 @@ async def api_me(request):
 
 if HAS_WEB:
     app.router.add_get("/", index)
+
+async def api_location(request):
+    try:
+        lat = float(request.query.get("lat", 0)); lon = float(request.query.get("lon", 0))
+    except Exception:
+        return web.json_response({"error": "bad coords"}, status=400)
+    inside = None; res = []
+    for bid, name, blat, blon, rad in db.execute(
+            "SELECT id,name,lat,lon,radius_m FROM buildings").fetchall():
+        d = haversine_m(lat, lon, blat, blon)
+        res.append({"name": name, "dist": round(d), "radius": rad, "inside": d <= rad})
+        if d <= rad and inside is None:
+            inside = name
+    return web.json_response({"inside": inside, "buildings": res})
+
+if HAS_WEB:
+    app.router.add_get("/api/location", api_location)
     app.router.add_get("/api/me", api_me)
+
 
 WEEKDAYS = ["Du", "Se", "Cho", "Pa", "Ju", "Sha", "Ya"]
 
@@ -447,7 +511,8 @@ async def menu(answer, role, text="🏫 **DAVOMAT BOTI**\n"):
                     ("👤 O'quvchi qo'shish", "add_student"),
                     ("🔐 O'qituvchini biriktirish", "assign"),
                     ("👥 Foydalanuvchini biriktirish", "assign_u"),
-                    ("📚 Dars qo'shish", "add_lesson")]
+                    ("📚 Dars qo'shish", "add_lesson"),
+                    ("📍 Bino qo'shish", "add_building")]
     await answer(text, reply_markup=kb(buttons, 2), parse_mode="Markdown")
 
 @dp.message(Command("menu"))
@@ -546,6 +611,51 @@ async def assign_u3(c: CallbackQuery, state: FSMContext):
     db.commit(); await state.clear()
     await c.message.answer("✅ Foydalanuvchi guruhga biriktirildi.")
     await menu(c.message.answer, role_of(c.from_user.id))
+
+# ================= bino (lokatsiya) =================
+@dp.callback_query(F.data == "add_building")
+async def add_building(c: CallbackQuery, state: FSMContext):
+    await state.set_state(AddBuilding.name)
+    await c.message.answer("Bino nomini yozing (masalan: A-korpus):")
+
+@dp.message(AddBuilding.name)
+async def b_name(m: Message, state: FSMContext):
+    await state.update_data(name=m.text.strip()); await state.set_state(AddBuilding.lat)
+    await m.answer("Binoning kengligini (latitude) yozing:\n"
+                   "Google Maps da binoga bosib ko'rish mumkin. Masalan: 41.367259")
+
+@dp.message(AddBuilding.lat)
+async def b_lat(m: Message, state: FSMContext):
+    try: float(m.text.strip())
+    except ValueError: return await m.answer("❌ Raqam kiriting, masalan: 41.367259")
+    await state.update_data(lat=float(m.text.strip())); await state.set_state(AddBuilding.lon)
+    await m.answer("Binoning uzunligini (longitude) yozing, masalan: 69.396813")
+
+@dp.message(AddBuilding.lon)
+async def b_lon(m: Message, state: FSMContext):
+    try: float(m.text.strip())
+    except ValueError: return await m.answer("❌ Raqam kiriting, masalan: 69.396813")
+    await state.update_data(lon=float(m.text.strip())); await state.set_state(AddBuilding.radius)
+    await m.answer("Radiusni metrda yozing (masalan: 100 — bino atrofida 100 m):")
+
+@dp.message(AddBuilding.radius)
+async def b_radius(m: Message, state: FSMContext):
+    try: r = int(m.text.strip())
+    except ValueError: return await m.answer("❌ Butun son kiriting, masalan: 100")
+    d = await state.get_data()
+    db.execute("INSERT INTO buildings(name,lat,lon,radius_m) VALUES(?,?,?,?)",
+               (d["name"], d["lat"], d["lon"], r)); db.commit(); await state.clear()
+    await m.answer(f"✅ Bino qo'shildi: {d['name']}\n"
+                   f"📍 {d['lat']}, {d['lon']} · radius: {r} m")
+    await menu(m.answer, role_of(m.from_user.id))
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    import math
+    R = 6371000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1); dl = math.radians(lon2 - lon1)
+    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
 
 # ================= dars jadvali =================
 @dp.callback_query(F.data == "add_lesson")
